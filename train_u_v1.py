@@ -38,6 +38,8 @@ from utils.common import *
 from utils.image import *
 from module.network import ROmniStereo
 from module.loss_functions import sequence_loss
+from tqdm import tqdm
+
 
 # Initialize
 torch.backends.cudnn.benchmark = True
@@ -195,7 +197,9 @@ def train(epoch_total, load_state):
         train_loss = 0
         print(f"\nEpoch: {epoch}")
 
-        for step, data_blob in enumerate(dbloader):
+        # for step, data_blob in enumerate(dbloader):
+        for step, data_blob in enumerate(tqdm(dbloader, total=len(dbloader), desc="Processing")):
+
             start_time = time.time()
             imgs, gt, valid, raw_imgs = data_blob
 
