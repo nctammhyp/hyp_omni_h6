@@ -138,6 +138,8 @@ def train(epoch_total, load_state):
         data = MultiDataset(opts.dbname, opts.data_opts, db_root=opts.db_root)
     else:
         data = Dataset(opts.dbname[0], opts.data_opts, db_root=opts.db_root)
+
+    print(f"Using dataset: {opts.dbname[0]}, db_root: {opts.db_root}")
     dbloader = torch.utils.data.DataLoader(data, batch_size=opts.batch_size,
                                            shuffle=True, drop_last=True)
     total_num_steps = len(data)*opts.total_epochs//opts.batch_size
