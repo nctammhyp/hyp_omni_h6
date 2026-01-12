@@ -50,7 +50,7 @@ parser.add_argument('--restore_ckpt', help="restore checkpoint")
 parser.add_argument('--pretrain_ckpt', help="pretrained checkpoint for finetuning")
 
 parser.add_argument('--db_root', default='/home/sw-tamnguyen/Desktop/depth_project/datasets/datasets', type=str, help='path to dataset')
-parser.add_argument('--dbname', nargs='+', default=['omnithings'], type=str,
+parser.add_argument('--dbname', nargs='+', default=['omnithings_subset'], type=str,
                     choices=['omnithings', 'omnihouse', 'sunny', 'cloudy', 'sunset', 'omnithings_subset'],  help='databases to train')
 
 # data options
