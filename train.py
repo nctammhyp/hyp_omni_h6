@@ -51,7 +51,7 @@ parser.add_argument('--pretrain_ckpt', help="pretrained checkpoint for finetunin
 
 parser.add_argument('--db_root', default=r'F:\tmp\datasets', type=str, help='path to dataset')
 parser.add_argument('--dbname', nargs='+', default=['omnithings'], type=str,
-                    choices=['omnithings', 'omnihouse', 'sunny', 'cloudy', 'sunset', 'omnithings_subset'],  help='databases to train')
+                    choices=['omnithings', 'omnihouse', 'sunny', 'cloudy', 'sunset', 'omnithings_subset', 'omnithings_test'],  help='databases to train')
 
 # data options
 parser.add_argument('--phi_deg', type=float, default=45.0, help='phi_deg')
@@ -134,61 +134,47 @@ def fetch_optimizer(model, num_steps):
 
 
 def train(epoch_total, load_state):
+    # --- load dataset
     if len(opts.dbname) > 1:
         data = MultiDataset(opts.dbname, opts.data_opts, db_root=opts.db_root)
     else:
         data = Dataset(opts.dbname[0], opts.data_opts, db_root=opts.db_root)
+    
     dbloader = torch.utils.data.DataLoader(data, batch_size=opts.batch_size,
                                            shuffle=True, drop_last=True)
-    total_num_steps = len(data)*opts.total_epochs//opts.batch_size
+    
+    total_num_steps = len(data) * opts.total_epochs // opts.batch_size
 
+    # --- model
     net = nn.DataParallel(ROmniStereo(opts.net_opts)).cuda()
     if opts.net_opts.fix_bn:
         net.module.freeze_bn()
     LOG_INFO("Parameter Count: %d" % count_parameters(net))
 
     optimizer, scheduler = fetch_optimizer(net, total_num_steps)
-    # scaler = GradScaler(enabled=opts.net_opts.mixed_precision)
     scaler = amp.GradScaler(enabled=opts.net_opts.mixed_precision)
-
 
     start_epoch = 0
     if load_state:
+        # --- load checkpoint or pretrain
         if opts.snapshot_path and osp.exists(opts.snapshot_path):
             snapshot = torch.load(opts.snapshot_path)
-            if 'net_state_dict' in snapshot.keys():
-                net.load_state_dict(snapshot['net_state_dict'])
-                LOG_INFO('checkpoint %s is loaded' % (opts.snapshot_path))
-            if 'epoch' in snapshot.keys():
-                start_epoch = snapshot['epoch'] + 1
-            if 'epoch_loss' in snapshot.keys():
-                epoch_loss = snapshot['epoch_loss']
-            if 'optimizer' in snapshot.keys():
-                optimizer.load_state_dict(snapshot['optimizer'])
-            if 'epoch' in snapshot.keys() and 'epoch_loss' in snapshot.keys():
-                LOG_INFO('startepoch:%d epoch_loss:%f' % (start_epoch, epoch_loss))
-        elif opts.pretrain_path is None:
-            sys.exit('%s do not exsits' % (opts.snapshot_path))
-
-        if opts.pretrain_path and osp.exists(opts.pretrain_path):
+            if 'net_state_dict' in snapshot: net.load_state_dict(snapshot['net_state_dict'])
+            if 'epoch' in snapshot: start_epoch = snapshot['epoch'] + 1
+            if 'optimizer' in snapshot: optimizer.load_state_dict(snapshot['optimizer'])
+            LOG_INFO(f'Loaded snapshot: {opts.snapshot_path}')
+        elif opts.pretrain_path and osp.exists(opts.pretrain_path):
             snapshot = torch.load(opts.pretrain_path)
-            if 'net_state_dict' in snapshot.keys():
-                net.load_state_dict(snapshot['net_state_dict'])
-                LOG_INFO('checkpoint %s is loaded' % (opts.pretrain_path))
-        elif opts.snapshot_path is None:
-            sys.exit('%s do not exsits' % (opts.snapshot_path))
+            if 'net_state_dict' in snapshot: net.load_state_dict(snapshot['net_state_dict'])
+            LOG_INFO(f'Loaded pretrain: {opts.pretrain_path}')
 
     grids = [torch.tensor(grid, requires_grad=False).cuda() for grid in data.grids]
 
-    if not osp.exists(opts.model_dir):
-        os.makedirs(opts.model_dir, exist_ok=True)
-        LOG_INFO('"%s" directory created' % (opts.model_dir))
-    if not osp.exists(opts.runs_dir):
-        os.makedirs(opts.runs_dir, exist_ok=True)
-        LOG_INFO('"%s" directory created' % (opts.runs_dir))
+    os.makedirs(opts.model_dir, exist_ok=True)
+    os.makedirs(opts.runs_dir, exist_ok=True)
     writer = SummaryWriter(log_dir=opts.runs_dir)
 
-    total_iters = len(data)*start_epoch//opts.batch_size
+    total_iters = len(data) * start_epoch // opts.batch_size
 
     for epoch in range(start_epoch, epoch_total):
         net.train()
@@ -199,13 +185,27 @@ def train(epoch_total, load_state):
             start_time = time.time()
             imgs, gt, valid, raw_imgs = data_blob
 
-            imgs = [img.cuda() for img in imgs]
-            gt = gt.cuda()
-            valid = valid.cuda()
+            # --- Convert imgs / gt / valid to CUDA tensors
+            imgs = [torch.tensor(img, dtype=torch.float32).cuda() if not isinstance(img, torch.Tensor) else img.cuda()
+                    for img in imgs]
+
+            if isinstance(gt, list):
+                gt = torch.tensor(np.array(gt), dtype=torch.float32).cuda()
+            elif isinstance(gt, np.ndarray):
+                gt = torch.tensor(gt, dtype=torch.float32).cuda()
+            elif isinstance(gt, torch.Tensor):
+                gt = gt.float().cuda()
+
+            if isinstance(valid, list):
+                valid = torch.tensor(np.array(valid), dtype=torch.float32).cuda()
+            elif isinstance(valid, np.ndarray):
+                valid = torch.tensor(valid, dtype=torch.float32).cuda()
+            elif isinstance(valid, torch.Tensor):
+                valid = valid.float().cuda()
 
             optimizer.zero_grad()
 
-            # Mixed precision
+            # --- Forward + loss (mixed precision)
             with amp.autocast(device_type='cuda', enabled=opts.net_opts.mixed_precision):
                 predictions = net(imgs, grids, opts.train_iters)
                 loss = sequence_loss(predictions, gt.unsqueeze(1), valid.unsqueeze(1))
@@ -213,31 +213,22 @@ def train(epoch_total, load_state):
             train_loss += loss.detach().item()
             epoch_loss = train_loss / (step + 1)
 
-            if step % 50 == 0:  # in thường xuyên hơn
-                print(f"Step {step}, Iter {total_iters}: Loss = {loss.detach().item():.3f}, "
+            if step % 50 == 0:
+                print(f"Step {step}, Iter {total_iters}: Loss = {loss.item():.3f}, "
                       f"Average Loss = {epoch_loss:.3f}, Time = {time.time() - start_time:.2f}s")
-                writer.add_scalar("train/loss", loss.detach().item(), total_iters)
+                writer.add_scalar("train/loss", loss.item(), total_iters)
 
-            # scaler.scale(loss).backward()
-            # scaler.unscale_(optimizer)
-            # torch.nn.utils.clip_grad_norm_(net.parameters(), 1.0)
-            # scaler.step(optimizer)
-            # scaler.update()
-            # scheduler.step()
-
+            # --- Backward + optimizer
             scaler.scale(loss).backward()
             scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(net.parameters(), 1.0)
-
-            # Thực sự gọi optimizer.step trước scheduler
             optimizer.step()
-            scheduler.step()   # gọi ngay sau optimizer
-            scaler.update()    # cập nhật scaler
-
+            scheduler.step()
+            scaler.update()
 
             total_iters += 1
 
-        # logging
+        # --- Logging visualization
         invdepth_idx = torch.clamp(predictions[-1][0][0], 0, opts.net_opts.num_invdepth - 1)
         writer.add_scalar("train/epoch_loss", epoch_loss, total_iters)
         invdepth = data.indexToInvdepth(toNumpy(invdepth_idx))
@@ -245,24 +236,25 @@ def train(epoch_total, load_state):
         vis_img = data.makeVisImage(raw_imgs, invdepth, gt=toNumpy(gt[0]))
         writer.add_image("train/vis", vis_img.transpose(2, 0, 1), total_iters)
 
-        # evaluation
+        # --- Evaluation (optional)
         net.eval()
         eval_list = data.opts.test_idx
         errors = np.zeros((len(eval_list), 5))
         for d in range(len(eval_list)):
             fidx = eval_list[d]
-            imgs, gt, valid, raw_imgs = data.loadSample(fidx)
-            imgs = [torch.Tensor(img).unsqueeze(0).cuda() for img in imgs]
+            imgs_eval, gt_eval, valid_eval, raw_imgs_eval = data.loadSample(fidx)
+            imgs_eval = [torch.tensor(img, dtype=torch.float32).unsqueeze(0).cuda() if not isinstance(img, torch.Tensor) else img.unsqueeze(0).cuda() 
+                         for img in imgs_eval]
+
             with torch.no_grad():
-                invdepth_idx = net(imgs, grids, opts.valid_iters, test_mode=True)
-            invdepth_idx = toNumpy(invdepth_idx[0, 0])
-            # Compute errors
-            errors[d, :] = data.evalError(invdepth_idx, gt, valid)
-            # Visualization
-        # logging
-        invdepth = data.indexToInvdepth(invdepth_idx)
-        raw_imgs = [toNumpy(raw) for raw in raw_imgs]
-        vis_img = data.makeVisImage(raw_imgs, invdepth, gt=toNumpy(gt))
+                invdepth_idx_eval = net(imgs_eval, grids, opts.valid_iters, test_mode=True)
+            invdepth_idx_eval = toNumpy(invdepth_idx_eval[0, 0])
+            errors[d, :] = data.evalError(invdepth_idx_eval, gt_eval, valid_eval)
+
+        # --- Logging validation images
+        invdepth = data.indexToInvdepth(invdepth_idx_eval)
+        raw_imgs = [toNumpy(raw) for raw in raw_imgs_eval]
+        vis_img = data.makeVisImage(raw_imgs, invdepth, gt=toNumpy(gt_eval))
         writer.add_image("val/vis", vis_img.transpose(2, 0, 1), total_iters)
 
         mean_errors = errors.mean(axis=0)
@@ -272,17 +264,17 @@ def train(epoch_total, load_state):
         writer.add_scalar("val/MAE", mean_errors[3], total_iters)
         writer.add_scalar("val/RMS", mean_errors[4], total_iters)
         LOG_INFO('>1: %.3f, >3: %.3f, >5: %.3f, MAE: %.3f, RMS: %.3f' %
-            (mean_errors[0], mean_errors[1], mean_errors[2], mean_errors[3], mean_errors[4]))
+                 (mean_errors[0], mean_errors[1], mean_errors[2], mean_errors[3], mean_errors[4]))
 
-        # save
-        savefilename = opts.model_dir + '/%s_e%d.pth' % (opts.name, epoch)
+        # --- Save checkpoint
+        savefilename = os.path.join(opts.model_dir, f'{opts.name}_e{epoch}.pth')
         torch.save({
-                'net_state_dict': net.state_dict(),
-                'net_opts': opts.net_opts,
-                'epoch': epoch,
-                'optimizer': optimizer.state_dict(),
-                'epoch_loss': epoch_loss,
-            }, savefilename)
+            'net_state_dict': net.state_dict(),
+            'net_opts': opts.net_opts,
+            'epoch': epoch,
+            'optimizer': optimizer.state_dict(),
+            'epoch_loss': epoch_loss,
+        }, savefilename)
 
 
 def main():

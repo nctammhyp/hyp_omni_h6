@@ -38,7 +38,6 @@ from utils.common import *
 from utils.image import *
 from module.network import ROmniStereo
 from module.loss_functions import sequence_loss
-from tqdm import tqdm
 
 # Initialize
 torch.backends.cudnn.benchmark = True
@@ -50,9 +49,11 @@ parser.add_argument('--name', default='ROmniStereo', help="name of your experime
 parser.add_argument('--restore_ckpt', help="restore checkpoint")
 parser.add_argument('--pretrain_ckpt', help="pretrained checkpoint for finetuning")
 
-parser.add_argument('--db_root', default='/home/sw-tamnguyen/Desktop/depth_project/datasets/datasets', type=str, help='path to dataset')
+# parser.add_argument('--db_root', default='/home/sw-tamnguyen/Desktop/depth_project/datasets/datasets', type=str, help='path to dataset')
+parser.add_argument('--db_root', default=r'F:\tmp\datasets', type=str, help='path to dataset')
+
 parser.add_argument('--dbname', nargs='+', default=['omnithings_subset'], type=str,
-                    choices=['omnithings', 'omnihouse', 'sunny', 'cloudy', 'sunset', 'omnithings_subset'],  help='databases to train')
+                    choices=['omnithings', 'omnihouse', 'sunny', 'cloudy', 'sunset', 'omnithings_subset', 'omnithings_test'],  help='databases to train')
 
 # data options
 parser.add_argument('--phi_deg', type=float, default=45.0, help='phi_deg')
@@ -136,8 +137,10 @@ def fetch_optimizer(model, num_steps):
 
 def train(epoch_total, load_state):
     if len(opts.dbname) > 1:
+        print("Training on multiple datasets: ", opts.dbname)
         data = MultiDataset(opts.dbname, opts.data_opts, db_root=opts.db_root)
     else:
+        print("Training on single dataset: ", opts.dbname[0])
         data = Dataset(opts.dbname[0], opts.data_opts, db_root=opts.db_root)
 
     print(f"Using dataset: {opts.dbname[0]}, db_root: {opts.db_root}")
@@ -198,9 +201,7 @@ def train(epoch_total, load_state):
         train_loss = 0
         print(f"\nEpoch: {epoch}")
 
-        # for step, data_blob in enumerate(dbloader):
-        for step, data_blob in enumerate(tqdm(dbloader, total=len(dbloader), desc="Processing")):
-
+        for step, data_blob in enumerate(dbloader):
             start_time = time.time()
             imgs, gt, valid, raw_imgs = data_blob
 

@@ -87,7 +87,10 @@ class Dataset(torch.utils.data.Dataset):
         # ------------------ default opts ------------------
         opts = Edict()
         opts.img_fmt = 'cam%d/%04d.png'
-        opts.gt_depth_fmt = 'omnidepth_gt_%d/%05d.tiff'
+        # opts.gt_depth_fmt = 'omnidepth_gt_%d/%05d.tiff'
+        opts.gt_depth_fmt = 'omnidepth_gt_640/%d.tiff'  # match your actual folder structure
+
+
         opts.equirect_size, opts.num_invdepth = [160, 640], 192
         opts.num_downsample = 1
         opts.phi_deg, opts.phi2_deg = 45, -1.0
@@ -110,6 +113,10 @@ class Dataset(torch.utils.data.Dataset):
         num_frames = len(img_files)
         opts.start, opts.step, opts.end = 1, 1, num_frames
         self.frame_idx = list(range(opts.start, opts.end + opts.step, opts.step))
+
+        print("----------------------------- frame indx -------------------------")
+
+        print(self.frame_idx)
 
         # ------------------ chia train/test 80/20 ------------------
         num_train = int(num_frames * 0.8)
@@ -275,29 +282,53 @@ class Dataset(torch.utils.data.Dataset):
         return (inv_depth - self.min_invdepth) / \
             self.sample_step_invdepth + start_index
     
-    def loadGTInvdepthIndex(self, fidx, remove_gt_noise=True,
-                            morph_win_size=5):
+    def loadGTInvdepthIndex(self, fidx, remove_gt_noise=True, morph_win_size=5):
         h, w = self.equirect_size
-        gt_depth_file = osp.join(self.db_path, self.gt_depth_fmt % (w, fidx))
-        gt = self.readInvdepth(gt_depth_file)
-        gt_h = gt.shape[0]
-        # crop height
+
+        # Construct GT depth file path
+        gt_depth_file = osp.join(self.db_path, self.gt_depth_fmt % fidx)
+        print(f"[DEBUG] Loading GT depth file: {gt_depth_file}")
+
+        # Check if the file exists
+        if not osp.exists(gt_depth_file):
+            raise FileNotFoundError(f"GT depth file not found: {gt_depth_file}")
+
+        # Read GT depth
+        gt = self.readInvdepth(gt_depth_file)  # đọc ảnh tiff float
+        print(f"[DEBUG] Original GT shape: {gt.shape}")
+
+        gt_h, gt_w = gt.shape[:2]
+        if gt_h == 0 or gt_w == 0:
+            raise ValueError(f"GT depth has invalid shape: {gt.shape}")
+
+        # Crop height if needed
         if h < gt_h:
             sh = int(round((gt_h - h) / 2.0))
             gt = gt[sh:sh + h, :]
+            print(f"[DEBUG] Cropped GT to shape: {gt.shape}")
 
+        # Crop width if needed
+        if w < gt_w:
+            sw = int(round((gt_w - w) / 2.0))
+            gt = gt[:, sw:sw + w]
+            print(f"[DEBUG] Cropped GT width to shape: {gt.shape}")
+
+        # Convert depth -> invdepth index
         gt_idx = self.invdepthToIndex(gt)
+        print(f"[DEBUG] Converted GT to invdepth index with shape: {gt_idx.shape}")
+
         if not remove_gt_noise:
             return gt_idx
-        # make valid mask
-        morph_filter = np.ones(
-            (morph_win_size, morph_win_size), dtype=np.uint8)
-        finite_depth = gt >= 1e-3 # <= 1000 m
-        closed_depth = scipy.ndimage.binary_closing(
-            finite_depth, morph_filter) 
+
+        # Remove noisy GT (holes)
+        morph_filter = np.ones((morph_win_size, morph_win_size), dtype=np.uint8)
+        finite_depth = gt >= 1e-3
+        closed_depth = scipy.ndimage.binary_closing(finite_depth, morph_filter)
         infinite_depth = np.logical_not(finite_depth)
         infinite_hole = np.logical_and(infinite_depth, closed_depth)
         gt_idx[infinite_hole] = -1
+
+        print(f"[DEBUG] GT after noise removal, valid pixels: {np.sum(gt_idx >= 0)} / {gt_idx.size}")
         return gt_idx
 
     def loadSample(self, fidx: int, read_input_image=True, varargin=None):
