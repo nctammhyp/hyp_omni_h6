@@ -30,6 +30,7 @@ from torch.utils.tensorboard import SummaryWriter
 #             pass
 
 from torch import amp
+from tqdm import tqdm
 
 
 # Internal modules
@@ -187,7 +188,8 @@ def train(epoch_total, load_state):
         train_loss = 0
         print(f"\nEpoch: {epoch}")
 
-        for step, data_blob in enumerate(dbloader):
+        # for step, data_blob in enumerate(dbloader):
+        for step, data_blob in enumerate(tqdm(dbloader, total=len(dbloader), desc="Processing")):
             start_time = time.time()
             imgs, gt, valid, raw_imgs = data_blob
             imgs = [img.cuda() for img in imgs]

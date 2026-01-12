@@ -51,7 +51,7 @@ parser.add_argument('--pretrain_ckpt', help="pretrained checkpoint for finetunin
 
 parser.add_argument('--db_root', default=r'F:\tmp\datasets', type=str, help='path to dataset')
 parser.add_argument('--dbname', nargs='+', default=['omnithings'], type=str,
-                    choices=['omnithings', 'omnihouse', 'sunny', 'cloudy', 'sunset'],  help='databases to train')
+                    choices=['omnithings', 'omnihouse', 'sunny', 'cloudy', 'sunset', 'omnithings_subset'],  help='databases to train')
 
 # data options
 parser.add_argument('--phi_deg', type=float, default=45.0, help='phi_deg')

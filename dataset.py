@@ -26,6 +26,8 @@ from utils.log import *
 from utils.ocam import *
 from utils.image import *
 import utils.dbhelper
+import glob
+
 
 
 def getEquirectCoordinate(pts: np.ndarray, equirect_size: (int, int),
@@ -78,43 +80,49 @@ def makeSphericalRays(equirect_size: (int, int),
 
 class Dataset(torch.utils.data.Dataset):
     def __init__(self, dbname: str, db_opts=None, load_lut=True, train=True, db_root=r'.\omnidata'):
-        super(torch.utils.data.Dataset, self).__init__()
+        super().__init__()
         self.dbname = dbname.lower()
         self.db_path = osp.join(db_root, self.dbname)
-        # Default arguments
+
+        # ------------------ default opts ------------------
         opts = Edict()
-        opts.img_fmt = 'cam%d/%04d.png'  # [cam_idx, fidx]
-        opts.gt_depth_fmt = 'omnidepth_gt_%d/%05d.tiff'  # [equi_w, fidx]
+        opts.img_fmt = 'cam%d/%04d.png'
+        opts.gt_depth_fmt = 'omnidepth_gt_%d/%05d.tiff'
         opts.equirect_size, opts.num_invdepth = [160, 640], 192
         opts.num_downsample = 1
         opts.phi_deg, opts.phi2_deg = 45, -1.0
-        opts.min_depth = 0.5  # meter scale
+        opts.min_depth = 0.5
         opts.max_depth = 1 / EPS
-        opts.max_fov = 220.0  # maximum FOV of input fisheye images
-        opts.read_input_image = True  # for evaluation, False if read only GT
-        opts.start, opts.step, opts.end = 1, 1, 1000  # frame
+        opts.max_fov = 220.0
+        opts.read_input_image = True
         opts.train_idx, opts.test_idx = [], []
         opts.gt_phi = 0.0
         opts.dtype = 'nogt'
 
-        # first update opts using pre-defined config 
-        # also load ocam parameters
-        opts, self.ocams = utils.dbhelper.loadDBConfigs(
-            self.dbname, self.db_path, opts)
-        # update opts from the argument
-        opts.lut_fmt = 'RoS_ds%d_lt_(%d,%d,%d).hwd'  # lookup table fmt [ds, equi_h, w, d]
+        # load db-specific configs (ocams, etc.)
+        opts, self.ocams = utils.dbhelper.loadDBConfigs(self.dbname, self.db_path, opts)
+        opts.lut_fmt = 'RoS_ds%d_lt_(%d,%d,%d).hwd'
         opts = argparse(opts, db_opts)
 
-        # set member variables
+        # ------------------ đếm số ảnh tự động ------------------
+        cam_folder = os.path.join(self.db_path, 'cam1')
+        img_files = sorted(glob.glob(os.path.join(cam_folder, '*.png')))
+        num_frames = len(img_files)
+        opts.start, opts.step, opts.end = 1, 1, num_frames
+        self.frame_idx = list(range(opts.start, opts.end + opts.step, opts.step))
+
+        # ------------------ chia train/test 80/20 ------------------
+        num_train = int(num_frames * 0.8)
+        self.train_idx = self.frame_idx[:num_train]
+        self.test_idx = self.frame_idx[num_train:]
+
+        # ------------------ set member variables ------------------
         self.opts = opts
         self.img_fmt, self.lut_fmt = opts.img_fmt, opts.lut_fmt
         self.gt_depth_fmt = opts.gt_depth_fmt
-        self.frame_idx = list(range(
-            opts.start, opts.end + opts.step, opts.step))
-        self.train_idx, self.test_idx = opts.train_idx, opts.test_idx
         self.gt_phi = opts.gt_phi
         self.dtype = opts.dtype
-        self.use_rgb = opts.use_rgb
+        self.use_rgb = getattr(opts, 'use_rgb', False)
 
         self.equirect_size = opts.equirect_size
         self.min_depth, self.max_depth = opts.min_depth, opts.max_depth
@@ -126,9 +134,11 @@ class Dataset(torch.utils.data.Dataset):
         self.data_size = len(self.frame_idx)
         self.train_size = len(self.train_idx)
         self.test_size = len(self.test_idx)
+
         self.__initSweep(load_lut)
         self.train = train
         self.augmentor = Augmentor()
+
 
     # end __init__
     
