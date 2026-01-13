@@ -43,6 +43,9 @@ from module.loss_functions import sequence_loss
 torch.backends.cudnn.benchmark = True
 torch.backends.cuda.benchmark = True
 
+from tqdm import tqdm
+
+
 parser = ArgumentParser(description='Training for ROmniStereo')
 
 parser.add_argument('--name', default='ROmniStereo', help="name of your experiment")
@@ -181,7 +184,8 @@ def train(epoch_total, load_state):
         train_loss = 0
         print(f"\nEpoch: {epoch}")
 
-        for step, data_blob in enumerate(dbloader):
+        # for step, data_blob in enumerate(dbloader):
+        for step, data_blob in enumerate(tqdm(dbloader, total=len(dbloader), desc="Processing")):
             start_time = time.time()
             imgs, gt, valid, raw_imgs = data_blob
 
@@ -213,10 +217,10 @@ def train(epoch_total, load_state):
             train_loss += loss.detach().item()
             epoch_loss = train_loss / (step + 1)
 
-            if step % 50 == 0:
-                print(f"Step {step}, Iter {total_iters}: Loss = {loss.item():.3f}, "
-                      f"Average Loss = {epoch_loss:.3f}, Time = {time.time() - start_time:.2f}s")
-                writer.add_scalar("train/loss", loss.item(), total_iters)
+            # if step % 50 == 0:
+            #     print(f"Step {step}, Iter {total_iters}: Loss = {loss.item():.3f}, "
+            #           f"Average Loss = {epoch_loss:.3f}, Time = {time.time() - start_time:.2f}s")
+            #     writer.add_scalar("train/loss", loss.item(), total_iters)
 
             # --- Backward + optimizer
             scaler.scale(loss).backward()
