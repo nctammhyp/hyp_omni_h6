@@ -111,6 +111,9 @@ class Dataset(torch.utils.data.Dataset):
         opts.start, opts.step, opts.end = 1, 1, num_frames
         self.frame_idx = list(range(opts.start, opts.end + opts.step, opts.step))
 
+        print(f"---------------------------------------------------------------")
+        print(f'Number of frames in the dataset "{self.dbname}": {num_frames}')
+
         # ------------------ chia train/test 80/20 ------------------
         num_train = int(num_frames * 0.8)
         self.train_idx = self.frame_idx[:num_train]
